@@ -269,6 +269,7 @@ if(UNIX AND NOT APPLE)
   if(X11_Xcursor_FOUND)
     set(FLTK_LIBRARIES ${FLTK_LIBRARIES} ${X11_Xcursor_LIB})
   endif()
+  set(FLTK_LIBRARIES ${FLTK_LIBRARIES} png)
 endif()
 
 if(FLTK_FOUND)
