@@ -1,4 +1,5 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
+ * Copyright (C) 2013 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -155,15 +156,18 @@ namespace rfb {
 
     rdr::InStream* is;
     rdr::OutStream* os;
-    CMsgReader* reader_;
     CMsgWriter* writer_;
     bool deleteStreamsWhenDone;
     bool shared;
-    stateEnum state_;
 
     CharArray serverName;
 
     bool useProtocol3_3;
+
+  protected:
+    CMsgReader* reader_;
+    stateEnum state_;
+
   };
 }
 #endif

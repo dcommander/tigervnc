@@ -1,6 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2009-2011 Pierre Ossman <ossman@cendio.se> for Cendio AB
- * Copyright (C) 2011 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011, 2013 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,6 +27,7 @@
 #include <unistd.h>
 #endif
 
+#include <rfb/CMsgReaderV3.h>
 #include <rfb/CMsgWriter.h>
 #include <rfb/encodings.h>
 #include <rfb/Hostname.h>
@@ -35,6 +36,7 @@
 #include <rfb/screenTypes.h>
 #include <rfb/fenceTypes.h>
 #include <rfb/Timer.h>
+#include <rdr/FileInStream.h>
 #include <rdr/MemInStream.h>
 #include <rdr/MemOutStream.h>
 #include <network/TcpSocket.h>
@@ -67,6 +69,9 @@ static const PixelFormat lowColourPF(8, 6, false, true,
 // 256 colours (palette)
 static const PixelFormat mediumColourPF(8, 8, false, false);
 
+extern FileInStream *benchFile;
+extern double getTime();
+
 CConn::CConn(const char* vncServerName, network::Socket* socket=NULL)
   : serverHost(0), serverPort(0), desktop(NULL),
     pendingPFChange(false),
@@ -77,6 +82,7 @@ CConn::CConn(const char* vncServerName, network::Socket* socket=NULL)
 {
   setShared(::shared);
   sock = socket;
+  benchmark = (benchFile != NULL);
 
   int encNum = encodingNum(preferredEncoding);
   if (encNum != -1)
@@ -94,31 +100,40 @@ CConn::CConn(const char* vncServerName, network::Socket* socket=NULL)
   cp.noJpeg = noJpeg;
   cp.qualityLevel = qualityLevel;
 
-  if(sock == NULL) {
-    try {
-      getHostAndPort(vncServerName, &serverHost, &serverPort);
-
-      sock = new network::TcpSocket(serverHost, serverPort);
-      vlog.info(_("connected to host %s port %d"), serverHost, serverPort);
-    } catch (rdr::Exception& e) {
-      vlog.error("%s", e.str());
-      fl_alert("%s", e.str());
-      exit_vncviewer();
-      return;
+  if (!benchmark) {
+    if (sock == NULL) {
+      try {
+        getHostAndPort(vncServerName, &serverHost, &serverPort);
+        sock = new network::TcpSocket(serverHost, serverPort);
+        vlog.info(_("connected to host %s port %d"), serverHost, serverPort);
+      } catch (rdr::Exception& e) {
+        vlog.error("%s", e.str());
+        fl_alert("%s", e.str());
+        exit_vncviewer();
+        return;
+      }
     }
+
+    Fl::add_fd(sock->getFd(), FL_READ | FL_EXCEPT, socketEvent, this);
+
+    // See callback below
+    sock->inStream().setBlockCallback(this);
+
+    setServerName(serverHost);
+    setStreams(&sock->inStream(), &sock->outStream());
+
+    initialiseProtocol();
+
+    OptionsDialog::addCallback(handleOptions, this);
+
+  } else {
+
+    state_ = RFBSTATE_INITIALISATION;
+    reader_ = new CMsgReaderV3(this, benchFile);
+    tDecode = tBlit = 0.0;
+    tBlitPixels = tBlitRect = 0;
+
   }
-
-  Fl::add_fd(sock->getFd(), FL_READ | FL_EXCEPT, socketEvent, this);
-
-  // See callback below
-  sock->inStream().setBlockCallback(this);
-
-  setServerName(serverHost);
-  setStreams(&sock->inStream(), &sock->outStream());
-
-  initialiseProtocol();
-
-  OptionsDialog::addCallback(handleOptions, this);
 }
 
 CConn::~CConn()
@@ -246,7 +261,21 @@ void CConn::serverInit()
   formatChange = encodingChange = true;
 
   // And kick off the update cycle
-  requestNewUpdate();
+  if (!benchmark)
+    requestNewUpdate();
+  else {
+    if (fullColour) {
+      pendingPF = fullColourPF;
+    } else {
+      if (lowColourLevel == 0)
+        pendingPF = verylowColourPF;
+      else if (lowColourLevel == 1)
+        pendingPF = lowColourPF;
+      else
+        pendingPF = mediumColourPF;
+    }
+    pendingPFChange = true;
+  }
 
   // This initial update request is a bit of a corner case, so we need
   // to help out setting the correct format here.
@@ -295,7 +324,7 @@ void CConn::framebufferUpdateStart()
   // Note: This might not be true if sync fences are supported
   pendingUpdate = false;
 
-  requestNewUpdate();
+  if (!benchmark) requestNewUpdate();
 }
 
 // framebufferUpdateEnd() is called at the end of an update.
@@ -324,7 +353,7 @@ void CConn::framebufferUpdateEnd()
   }
 
   // Compute new settings based on updated bandwidth values
-  if (autoSelect)
+  if (autoSelect && !benchmark)
     autoSelectFormatAndEncoding();
 
   // Make sure that the FLTK handling and the timers gets some CPU time
@@ -374,12 +403,26 @@ void CConn::serverCutText(const char* str, rdr::U32 len)
   delete [] buffer;
 }
 
+void CConn::startDecodeTimer() {
+  if (benchmark) {
+    tDecodeStart = getTime();
+    tReadOld = benchFile->getReadTime();
+  }
+}
+
+void CConn::stopDecodeTimer() {
+  if (benchmark)
+    tDecode += getTime() - tDecodeStart -
+               (benchFile->getReadTime() - tReadOld);
+}
+
 // We start timing on beginRect and stop timing on endRect, to
 // avoid skewing the bandwidth estimation as a result of the server
 // being slow or the network having high latency
 void CConn::beginRect(const Rect& r, int encoding)
 {
-  sock->inStream().startTiming();
+  if (!benchmark)
+    sock->inStream().startTiming();
   if (encoding != encodingCopyRect) {
     lastServerEncoding = encoding;
   }
@@ -387,7 +430,8 @@ void CConn::beginRect(const Rect& r, int encoding)
 
 void CConn::endRect(const Rect& r, int encoding)
 {
-  sock->inStream().stopTiming();
+  if (!benchmark)
+    sock->inStream().stopTiming();
 }
 
 void CConn::fillRect(const rfb::Rect& r, rfb::Pixel p)
@@ -400,7 +444,9 @@ void CConn::imageRect(const rfb::Rect& r, void* p)
 }
 void CConn::copyRect(const rfb::Rect& r, int sx, int sy)
 {
+  double tBlitStart = getTime();
   desktop->copyRect(r,sx,sy);
+  tBlit += getTime() - tBlitStart;
 }
 void CConn::setCursor(int width, int height, const Point& hotspot,
                       void* data, void* mask)

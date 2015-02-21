@@ -3,6 +3,7 @@ include_directories(${CMAKE_SOURCE_DIR}/common ${ZLIB_INCLUDE_DIRS})
 add_library(rdr STATIC
   Exception.cxx
   FdInStream.cxx
+  FileInStream.cxx
   FdOutStream.cxx
   HexInStream.cxx
   HexOutStream.cxx
