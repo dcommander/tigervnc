@@ -14,6 +14,7 @@ set(VNCVIEWER_SOURCES
   Viewport.cxx
   parameters.cxx
   keysym2ucs.c
+  ../tests/util.cxx
   vncviewer.cxx)
 
 if(WIN32)

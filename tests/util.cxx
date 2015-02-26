@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #ifdef WIN32
 #include <windows.h>
@@ -116,4 +117,11 @@ double getCpuCounter(cpucounter_t c)
 #endif
 
   return seconds;
+}
+
+double getTime(void)
+{
+  struct timeval __tv;
+  gettimeofday(&__tv, (struct timezone *)NULL);
+  return((double)__tv.tv_sec + (double)__tv.tv_usec * 0.000001);
 }

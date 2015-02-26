@@ -25,6 +25,8 @@
 
 using namespace rdr;
 
+extern double getTime();
+
 FileInStream::FileInStream(const char *fileName)
 {
   file = fopen(fileName, "rb");
@@ -61,6 +63,8 @@ int FileInStream::overrun(int itemSize, int nItems, bool wait)
   if (itemSize > (int)sizeof(b))
     throw Exception("FileInStream overrun: max itemSize exceeded");
 
+  double tReadStart = getTime();
+
   if (end - ptr != 0)
     memmove(b, ptr, end - ptr);
 
@@ -71,6 +75,7 @@ int FileInStream::overrun(int itemSize, int nItems, bool wait)
   while (end < b + itemSize) {
     size_t n = fread((U8 *)end, b + sizeof(b) - end, 1, file);
     if (n < 1) {
+      tRead += getTime() - tReadStart;
       if (n < 0 || ferror(file))
         throw SystemException("fread", errno);
       if (feof(file))
@@ -82,6 +87,8 @@ int FileInStream::overrun(int itemSize, int nItems, bool wait)
 
   if (itemSize * nItems > end - ptr)
     nItems = (end - ptr) / itemSize;
+
+  tRead += getTime() - tReadStart;
 
   return nItems;
 }
