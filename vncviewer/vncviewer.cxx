@@ -1,6 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2011 Pierre Ossman <ossman@cendio.se> for Cendio AB
- * Copyright (C) 2011 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011, 2013 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,6 +37,7 @@
 #include <os/winerrno.h>
 #include <direct.h>
 #define mkdir(path, mode) _mkdir(path)
+#define strcasecmp stricmp
 #endif
 
 #if !defined(WIN32) && !defined(__APPLE__)
@@ -44,6 +45,7 @@
 #include <X11/XKBlib.h>
 #endif
 
+#include <rdr/FileInStream.h>
 #include <rfb/Logger_stdio.h>
 #include <rfb/SecurityClient.h>
 #include <rfb/Security.h>
@@ -70,6 +72,7 @@
 #include "UserDialog.h"
 #include "vncviewer.h"
 #include "fltk_layout.h"
+#include "../tests/util.h"
 
 #ifdef WIN32
 #include "resource.h"
@@ -106,6 +109,9 @@ static const char *about_text()
 
   return buffer;
 }
+
+rdr::FileInStream *benchFile = NULL;
+int benchIter = 1, benchWarmup = 0;
 
 void exit_vncviewer(const char *error)
 {
@@ -505,6 +511,27 @@ int main(int argc, char** argv)
       if (Configuration::setParam(argv[i]))
         continue;
 
+      if (!strcasecmp(argv[i], "-bench") && i < argc - 1) {
+        char *fileName = argv[++i];
+        try {
+          benchFile = new rdr::FileInStream(fileName);
+        } catch (Exception e) {
+          fl_alert("Could not open session capture %s: %s", fileName,
+                   e.str());
+          exit(1);
+        }
+      }
+
+      if (!strcmp(argv[i], "-benchiter") && i < argc -1) {
+        int iter = atoi(argv[++i]);
+        if (iter > 0) benchIter = iter;
+      }
+
+      if (strcmp(argv[i], "-benchwarmup") == 0 && i < argc -1) {
+        int warmup = atoi(argv[++i]);
+        if (warmup > 0) benchWarmup = warmup;
+      }
+
       if (argv[i][0] == '-') {
         if (i+1 < argc) {
           if (Configuration::setParam(&argv[i][1], argv[i+1])) {
@@ -594,7 +621,7 @@ int main(int argc, char** argv)
       listeners.pop_back();
     }
   } else {
-    if (vncServerName[0] == '\0') {
+    if (vncServerName[0] == '\0' && benchFile == NULL) {
       ServerDialog::run(defaultServerName, vncServerName);
       if (vncServerName[0] == '\0')
         return 1;
@@ -606,12 +633,67 @@ int main(int argc, char** argv)
 #endif
   }
 
-  CConn *cc = new CConn(vncServerName, sock);
+  CConn *cc = NULL;
 
-  while (!exitMainloop)
-    run_mainloop();
+  double tAvg = 0.0, tAvgDecode = 0.0, tAvgBlit = 0.0;
+  if (benchFile == NULL) { benchIter = 1;  benchWarmup = 0; }
 
-  delete cc;
+  for (int i = 0; i < benchIter + benchWarmup; i++) {
+    double tStart = 0.0, tTotal;
+
+    cc = new CConn(vncServerName, sock);
+
+    if (benchFile) {
+      if (i < benchWarmup)
+        printf("Benchmark warmup run %d\n", i + 1);
+      else
+        printf("Benchmark run %d:\n", i + 1 - benchWarmup);
+      tStart = getTime();
+
+      try {
+        while (1) {
+          cc->processMsg();
+        }
+      } catch (rdr::EndOfStream e) {
+      } catch (rdr::Exception e) {
+        fl_alert("%s", e.str());
+      }
+
+      tTotal = getTime() - tStart - benchFile->getReadTime();
+      if (i >= benchWarmup) {
+        printf("%f s (Decode = %f, Blit = %f)\n", tTotal,
+               cc->tDecode, cc->tBlit);
+        printf("     %.3f Mpixels, %.3f Mpixels/sec, %lu rect, %.0f pixels/rect\n",
+               (double)cc->tBlitPixels / 1000000.,
+               (double)cc->tBlitPixels / 1000000. / cc->tBlit, cc->tBlitRect,
+               (double)cc->tBlitPixels / (double)cc->tBlitRect);
+        tAvg += tTotal;
+        tAvgDecode += cc->tDecode;
+        tAvgBlit += cc->tBlit;
+      }
+      printf("\n");
+      cc->tDecode = cc->tBlit = 0.0;
+      cc->tBlitPixels = cc->tBlitRect = 0;
+      benchFile->reset();
+      benchFile->resetReadTime();
+
+    } else {
+
+      while (!exitMainloop)
+        run_mainloop();
+
+    }
+
+    delete cc;
+  }
+
+  if (benchFile != NULL && benchIter > 1)
+    printf("Average          :  %f s (Decode = %f, Blit = %f)\n",
+           tAvg / (double)benchIter,
+           tAvgDecode / (double)benchIter,
+           tAvgBlit / (double)benchIter);
+
+  if (benchFile) delete benchFile;
 
   if (exitError != NULL && alertOnFatalError)
     fl_alert("%s", exitError);

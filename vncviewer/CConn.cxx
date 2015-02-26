@@ -1,5 +1,5 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright (C) 2011 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011, 2013, 2017 D. R. Commander.  All Rights Reserved.
  * Copyright 2009-2014 Pierre Ossman for Cendio AB
  * 
  * This is free software; you can redistribute it and/or modify
@@ -27,6 +27,7 @@
 #include <unistd.h>
 #endif
 
+#include <rfb/CMsgReader.h>
 #include <rfb/CMsgWriter.h>
 #include <rfb/CSecurity.h>
 #include <rfb/Hostname.h>
@@ -36,6 +37,7 @@
 #include <rfb/screenTypes.h>
 #include <rfb/fenceTypes.h>
 #include <rfb/Timer.h>
+#include <rdr/FileInStream.h>
 #include <rdr/MemInStream.h>
 #include <rdr/MemOutStream.h>
 #include <network/TcpSocket.h>
@@ -71,6 +73,9 @@ static const PixelFormat lowColourPF(8, 6, false, true,
 static const PixelFormat mediumColourPF(8, 8, false, true,
                                         7, 7, 3, 5, 2, 0);
 
+extern FileInStream *benchFile;
+extern double getTime();
+
 CConn::CConn(const char* vncServerName, network::Socket* socket=NULL)
   : serverHost(0), serverPort(0), desktop(NULL),
     frameCount(0), pixelCount(0), pendingPFChange(false),
@@ -81,6 +86,7 @@ CConn::CConn(const char* vncServerName, network::Socket* socket=NULL)
 {
   setShared(::shared);
   sock = socket;
+  benchmark = (benchFile != NULL);
 
   int encNum = encodingNum(preferredEncoding);
   if (encNum != -1)
@@ -102,32 +108,43 @@ CConn::CConn(const char* vncServerName, network::Socket* socket=NULL)
   else
     cp.qualityLevel = -1;
 
-  if(sock == NULL) {
-    try {
-      getHostAndPort(vncServerName, &serverHost, &serverPort);
+  if (!benchmark) {
+    if(sock == NULL) {
+      try {
+        getHostAndPort(vncServerName, &serverHost, &serverPort);
 
-      sock = new network::TcpSocket(serverHost, serverPort);
-      vlog.info(_("connected to host %s port %d"), serverHost, serverPort);
-    } catch (rdr::Exception& e) {
-      vlog.error("%s", e.str());
-      if (alertOnFatalError)
-        fl_alert("%s", e.str());
-      exit_vncviewer();
-      return;
+        sock = new network::TcpSocket(serverHost, serverPort);
+        vlog.info(_("connected to host %s port %d"), serverHost, serverPort);
+      } catch (rdr::Exception& e) {
+        vlog.error("%s", e.str());
+        if (alertOnFatalError)
+          fl_alert("%s", e.str());
+        exit_vncviewer();
+        return;
+      }
     }
+
+    Fl::add_fd(sock->getFd(), FL_READ | FL_EXCEPT, socketEvent, this);
+
+    // See callback below
+    sock->inStream().setBlockCallback(this);
+
+    setServerName(serverHost);
+    setStreams(&sock->inStream(), &sock->outStream());
+
+    initialiseProtocol();
+
+    OptionsDialog::addCallback(handleOptions, this);
+
+  } else {
+
+    state_ = RFBSTATE_INITIALISATION;
+    reader_ = new CMsgReader(this, benchFile);
+    setStreams(benchFile, NULL);
+    tDecode = tBlit = 0.0;
+    tBlitPixels = tBlitRect = 0;
+
   }
-
-  Fl::add_fd(sock->getFd(), FL_READ | FL_EXCEPT, socketEvent, this);
-
-  // See callback below
-  sock->inStream().setBlockCallback(this);
-
-  setServerName(serverHost);
-  setStreams(&sock->inStream(), &sock->outStream());
-
-  initialiseProtocol();
-
-  OptionsDialog::addCallback(handleOptions, this);
 }
 
 CConn::~CConn()
@@ -317,7 +334,21 @@ void CConn::serverInit()
   formatChange = encodingChange = true;
 
   // And kick off the update cycle
-  requestNewUpdate();
+  if (!benchmark)
+    requestNewUpdate();
+  else {
+    if (fullColour) {
+      pendingPF = fullColourPF;
+    } else {
+      if (lowColourLevel == 0)
+        pendingPF = verylowColourPF;
+      else if (lowColourLevel == 1)
+        pendingPF = lowColourPF;
+      else
+        pendingPF = mediumColourPF;
+    }
+    pendingPFChange = true;
+  }
 
   // This initial update request is a bit of a corner case, so we need
   // to help out setting the correct format here.
@@ -356,21 +387,38 @@ void CConn::setName(const char* name)
     desktop->setName(name);
 }
 
+void CConn::startDecodeTimer() {
+  if (benchmark) {
+    tDecodeStart = getTime();
+    tReadOld = benchFile->getReadTime();
+  }
+}
+
+void CConn::stopDecodeTimer() {
+  if (benchmark)
+    tDecode += getTime() - tDecodeStart -
+               (benchFile->getReadTime() - tReadOld);
+}
+
 // framebufferUpdateStart() is called at the beginning of an update.
 // Here we try to send out a new framebuffer update request so that the
 // next update can be sent out in parallel with us decoding the current
 // one.
 void CConn::framebufferUpdateStart()
 {
+  if (benchmark) startDecodeTimer();
+
   CConnection::framebufferUpdateStart();
 
   // Note: This might not be true if sync fences are supported
   pendingUpdate = false;
 
-  requestNewUpdate();
+  if (!benchmark) {
+    requestNewUpdate();
 
-  // Update the screen prematurely for very slow updates
-  Fl::add_timeout(1.0, handleUpdateTimeout, this);
+    // Update the screen prematurely for very slow updates
+    Fl::add_timeout(1.0, handleUpdateTimeout, this);
+  }
 }
 
 // framebufferUpdateEnd() is called at the end of an update.
@@ -380,6 +428,8 @@ void CConn::framebufferUpdateStart()
 void CConn::framebufferUpdateEnd()
 {
   CConnection::framebufferUpdateEnd();
+
+  if (benchmark) stopDecodeTimer();
 
   frameCount++;
 
@@ -403,8 +453,15 @@ void CConn::framebufferUpdateEnd()
   }
 
   // Compute new settings based on updated bandwidth values
-  if (autoSelect)
+  if (autoSelect && !benchmark)
     autoSelectFormatAndEncoding();
+
+  if (benchmark) {
+    // Make sure that the FLTK handling and the timers gets some CPU time
+    // in case of back to back framebuffer updates.
+    Fl::check();
+    Timer::checkTimeouts();
+  }
 }
 
 // The rest of the callbacks are fairly self-explanatory...
@@ -451,14 +508,16 @@ void CConn::serverCutText(const char* str, rdr::U32 len)
 
 void CConn::dataRect(const Rect& r, int encoding)
 {
-  sock->inStream().startTiming();
+  if (!benchmark)
+    sock->inStream().startTiming();
 
   if (encoding != encodingCopyRect)
     lastServerEncoding = encoding;
 
   CConnection::dataRect(r, encoding);
 
-  sock->inStream().stopTiming();
+  if (!benchmark)
+    sock->inStream().stopTiming();
 
   pixelCount += r.area();
 }

@@ -33,6 +33,9 @@ namespace rdr {
     FileInStream(const char *fileName);
     ~FileInStream(void);
 
+    double getReadTime() { return tRead; }
+    void resetReadTime() { tRead = 0.0; }
+
     void reset(void);
 
     int pos();
@@ -43,6 +46,7 @@ namespace rdr {
   private:
     U8 b[131072];
     FILE *file;
+    double tRead;
   };
 
 } // end of namespace rdr

@@ -1,5 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2011-2017 Pierre Ossman for Cendio AB
+ * Copyright (C) 2013, 2017 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -149,6 +150,7 @@ namespace rfb {
 
     CSecurity *csecurity;
     SecurityClient security;
+    double tBlit;
   protected:
     void setState(stateEnum s) { state_ = s; }
 
@@ -176,11 +178,15 @@ namespace rfb {
 
     rdr::InStream* is;
     rdr::OutStream* os;
+  protected:
     CMsgReader* reader_;
+  private:
     CMsgWriter* writer_;
     bool deleteStreamsWhenDone;
     bool shared;
+  protected:
     stateEnum state_;
+  private:
 
     CharArray serverName;
 

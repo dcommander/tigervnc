@@ -1,5 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2011-2014 Pierre Ossman for Cendio AB
+ * Copyright (C) 2013, 2017 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,6 +26,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <rdr/FileInStream.h>
 #include <rfb/CMsgWriter.h>
 #include <rfb/LogWriter.h>
 #include <rfb/Exception.h>
@@ -65,6 +67,7 @@
 
 #include <FL/fl_draw.H>
 #include <FL/fl_ask.H>
+#include <FL/x.H>
 
 #include <FL/Fl_Menu.H>
 #include <FL/Fl_Menu_Button.H>
@@ -92,12 +95,19 @@ enum { ID_EXIT, ID_FULLSCREEN, ID_MINIMIZE, ID_RESIZE,
 // Fake key presses use this value and above
 static const int fakeKeyBase = 0x200;
 
+extern FileInStream *benchFile;
+extern double getTime();
+
 Viewport::Viewport(int w, int h, const rfb::PixelFormat& serverPF, CConn* cc_)
   : Fl_Widget(0, 0, w, h), cc(cc_), frameBuffer(NULL),
     lastPointerPos(0, 0), lastButtonMask(0),
     menuCtrlKey(false), menuAltKey(false), cursor(NULL)
 {
-  Fl::add_clipboard_notify(handleClipboardChange, this);
+  benchmark = (benchFile != NULL);
+  inUpdateWindow = false;
+
+  if (!benchmark)
+    Fl::add_clipboard_notify(handleClipboardChange, this);
 
   // We need to intercept keyboard events early
   Fl::add_system_handler(handleSystemEvent, this);
@@ -164,9 +174,27 @@ const rfb::PixelFormat &Viewport::getPreferredPF()
 void Viewport::updateWindow()
 {
   Rect r;
+  double tBlitStart = 0.0;
+
+  if (benchmark) {
+    inUpdateWindow = true;
+    tBlitStart = getTime();
+  }
 
   r = frameBuffer->getDamage();
   damage(FL_DAMAGE_USER1, r.tl.x + x(), r.tl.y + y(), r.width(), r.height());
+
+  if (benchmark) {
+    cc->tBlitPixels += r.width() * r.height();
+    cc->tBlitRect += 1;
+#if !defined(WIN32) && !defined(__APPLE__)
+    XSync(fl_display, False);
+#else
+    Fl::flush();
+#endif
+    cc->tBlit += getTime() - tBlitStart;
+    inUpdateWindow = false;
+  }
 }
 
 static const char * dotcursor_xpm[] = {
@@ -221,26 +249,52 @@ void Viewport::setCursor(int width, int height, const Point& hotspot,
 void Viewport::draw(Surface* dst)
 {
   int X, Y, W, H;
+  double tBlitStart = 0.0;
 
   // Check what actually needs updating
   fl_clip_box(x(), y(), w(), h(), X, Y, W, H);
   if ((W == 0) || (H == 0))
     return;
 
+  if (benchmark && !inUpdateWindow)
+    tBlitStart = getTime();
+
   frameBuffer->draw(dst, X - x(), Y - y(), X, Y, W, H);
+
+  if (benchmark && !inUpdateWindow) {
+#if !defined(WIN32) && !defined(__APPLE__)
+    XSync(fl_display, False);
+#else
+    Fl::flush();
+#endif
+    cc->tBlit += getTime() - tBlitStart;
+  }
 }
 
 
 void Viewport::draw()
 {
   int X, Y, W, H;
+  double tBlitStart = 0.0;
 
   // Check what actually needs updating
   fl_clip_box(x(), y(), w(), h(), X, Y, W, H);
   if ((W == 0) || (H == 0))
     return;
 
+  if (benchmark && !inUpdateWindow)
+    tBlitStart = getTime();
+
   frameBuffer->draw(X - x(), Y - y(), X, Y, W, H);
+
+  if (benchmark && !inUpdateWindow) {
+#if !defined(WIN32) && !defined(__APPLE__)
+    XSync(fl_display, False);
+#else
+    Fl::flush();
+#endif
+    cc->tBlit += getTime() - tBlitStart;
+  }
 }
 
 
@@ -278,7 +332,8 @@ int Viewport::handle(int event)
     vlog.debug("Sending clipboard data (%d bytes)", (int)strlen(buffer));
 
     try {
-      cc->writer()->clientCutText(buffer, ret);
+      if (!benchmark)
+        cc->writer()->clientCutText(buffer, ret);
     } catch (rdr::Exception& e) {
       vlog.error("%s", e.str());
       exit_vncviewer(e.str());
@@ -372,7 +427,7 @@ void Viewport::handleClipboardChange(int source, void *data)
 
 void Viewport::handlePointerEvent(const rfb::Point& pos, int buttonMask)
 {
-  if (!viewOnly) {
+  if (!viewOnly && !benchmark) {
     if (pointerEventInterval == 0 || buttonMask != lastButtonMask) {
       try {
         cc->writer()->pointerEvent(pos, buttonMask);
@@ -409,6 +464,9 @@ void Viewport::handlePointerTimeout(void *data)
 void Viewport::handleKeyPress(int keyCode, rdr::U32 keySym)
 {
   static bool menuRecursion = false;
+
+  if (viewOnly || benchmark)
+    return;
 
   // Prevent recursion if the menu wants to send its own
   // activation key.
@@ -516,7 +574,7 @@ void Viewport::handleKeyRelease(int keyCode)
 {
   DownMap::iterator iter;
 
-  if (viewOnly)
+  if (viewOnly || benchmark)
     return;
 
   iter = downKeySym.find(keyCode);
