@@ -1,5 +1,5 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright (C) 2013 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2013, 2021 D. R. Commander.  All Rights Reserved.
  * Copyright 2015 Pierre Ossman for Cendio AB
  *
  * This is free software; you can redistribute it and/or modify
@@ -22,6 +22,7 @@
 
 #include <rdr/Exception.h>
 #include <rdr/FileInStream.h>
+#include "../../tests/perf/util.h"
 
 using namespace rdr;
 
@@ -61,6 +62,8 @@ size_t FileInStream::overrun(size_t itemSize, size_t nItems, bool wait)
   if (itemSize > sizeof(b))
     throw Exception("FileInStream overrun: max itemSize exceeded");
 
+  double tReadStart = getTime();
+
   if (end - ptr != 0)
     memmove(b, ptr, end - ptr);
 
@@ -71,6 +74,7 @@ size_t FileInStream::overrun(size_t itemSize, size_t nItems, bool wait)
   while ((size_t)(end - b) < itemSize) {
     size_t n = fread((U8 *)end, b + sizeof(b) - end, 1, file);
     if (n == 0) {
+      tRead += getTime() - tReadStart;
       if (ferror(file))
         throw SystemException("fread", errno);
       if (feof(file))
@@ -79,6 +83,8 @@ size_t FileInStream::overrun(size_t itemSize, size_t nItems, bool wait)
     }
     end += b + sizeof(b) - end;
   }
+
+  tRead += getTime() - tReadStart;
 
   size_t nAvail;
   nAvail = (end - ptr) / itemSize;

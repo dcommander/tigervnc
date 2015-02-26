@@ -1,4 +1,5 @@
 /* Copyright 2015 Pierre Ossman for Cendio AB
+ * Copyright (C) 2017 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,7 +18,9 @@
  */
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include <rfb/CConnection.h>
 #include <rfb/DecodeManager.h>
@@ -47,6 +50,12 @@ DecodeManager::DecodeManager(CConnection *conn) :
   consumerCond = new os::Condition(queueMutex);
 
   cpuCount = os::Thread::getSystemCPUCount();
+  char *env = getenv("TIGERVNC_NTHREADS");
+  if (env && strlen(env) > 0) {
+    size_t temp = atoi(env);
+    if (temp >= 1)
+      cpuCount = temp;
+  }
   if (cpuCount == 0) {
     vlog.error("Unable to determine the number of CPU cores on this system");
     cpuCount = 1;

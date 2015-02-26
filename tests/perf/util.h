@@ -1,4 +1,5 @@
 /* Copyright 2013-2014 Pierre Ossman <ossman@cendio.se> for Cendio AB
+ * Copyright (C) 2021 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +20,10 @@
 #ifndef __TESTS_UTIL_H__
 #define __TESTS_UTIL_H__
 
+#include <rdr/FileInStream.h>
+
+extern rdr::FileInStream *benchFile;
+
 typedef void* cpucounter_t;
 
 void startCpuCounter(void);
@@ -33,6 +38,8 @@ void startCpuCounter(cpucounter_t c);
 void endCpuCounter(cpucounter_t c);
 
 double getCpuCounter(cpucounter_t c);
+
+double getTime(void);
 
 void startTimeCounter(void);
 void endTimeCounter(void);

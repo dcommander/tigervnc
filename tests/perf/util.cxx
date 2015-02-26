@@ -1,4 +1,5 @@
 /* Copyright 2013-2014 Pierre Ossman <ossman@cendio.se> for Cendio AB
+ * Copyright (C) 2021 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +20,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #ifdef WIN32
 #include <windows.h>
@@ -28,6 +30,8 @@
 #endif
 
 #include "util.h"
+
+rdr::FileInStream *benchFile = NULL;
 
 #ifdef WIN32
 typedef struct {
@@ -132,6 +136,13 @@ double getCpuCounter(cpucounter_t c)
 #endif
 
   return sysSeconds + userSeconds;
+}
+
+double getTime(void)
+{
+  struct timeval __tv;
+  gettimeofday(&__tv, (struct timezone *)NULL);
+  return((double)__tv.tv_sec + (double)__tv.tv_usec * 0.000001);
 }
 
 #ifdef WIN32

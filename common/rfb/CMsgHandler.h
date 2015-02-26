@@ -1,6 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2009-2019 Pierre Ossman for Cendio AB
- * Copyright (C) 2011 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011, 2013 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -67,6 +67,8 @@ namespace rfb {
     virtual void framebufferUpdateStart();
     virtual void framebufferUpdateEnd();
     virtual void dataRect(const Rect& r, int encoding) = 0;
+    virtual void startDecodeTimer() {}
+    virtual void stopDecodeTimer() {}
 
     virtual void setColourMapEntries(int firstColour, int nColours,
 				     rdr::U16* rgbs) = 0;

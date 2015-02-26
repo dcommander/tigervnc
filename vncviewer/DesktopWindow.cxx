@@ -1,5 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2011 Pierre Ossman <ossman@cendio.se> for Cendio AB
+ * Copyright (C) 2021 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,6 +39,7 @@
 #include "Surface.h"
 #include "Viewport.h"
 #include "touch.h"
+#include "../tests/perf/util.h"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Image_Surface.H>
@@ -181,7 +183,8 @@ DesktopWindow::DesktopWindow(int w, int h, const char *name,
   // Throughput graph for debugging
   if (vlog.getLevel() >= LogWriter::LEVEL_DEBUG) {
     memset(&stats, 0, sizeof(stats));
-    Fl::add_timeout(0, handleStatsTimeout, this);
+    if (!benchFile)
+      Fl::add_timeout(0, handleStatsTimeout, this);
   }
 
   // Show hint about menu key

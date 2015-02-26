@@ -1,5 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2011-2019 Pierre Ossman for Cendio AB
+ * Copyright (C) 2021 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -36,6 +37,8 @@
 
 #include <rdr/InStream.h>
 #include <rdr/OutStream.h>
+
+#include "../../tests/perf/util.h"
 
 using namespace rfb;
 
@@ -669,6 +672,8 @@ void CConnection::fence(rdr::U32 flags, unsigned len, const char data[])
 // format and encoding appropriately.
 void CConnection::requestNewUpdate()
 {
+  if (benchFile != NULL) return;
+
   if (formatChange && !pendingPFChange) {
     /* Catch incorrect requestNewUpdate calls */
     assert(!pendingUpdate || continuousUpdates);

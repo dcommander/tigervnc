@@ -1,5 +1,5 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright (C) 2011 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011, 2013, 2017, 2021 D. R. Commander.  All Rights Reserved.
  * Copyright 2009-2014 Pierre Ossman for Cendio AB
  * 
  * This is free software; you can redistribute it and/or modify
@@ -27,6 +27,7 @@
 #include <unistd.h>
 #endif
 
+#include <rfb/CMsgReader.h>
 #include <rfb/CMsgWriter.h>
 #include <rfb/CSecurity.h>
 #include <rfb/Hostname.h>
@@ -36,6 +37,7 @@
 #include <rfb/screenTypes.h>
 #include <rfb/fenceTypes.h>
 #include <rfb/Timer.h>
+#include <rdr/FileInStream.h>
 #include <network/TcpSocket.h>
 #ifndef WIN32
 #include <network/UnixSocket.h>
@@ -51,6 +53,7 @@
 #include "i18n.h"
 #include "parameters.h"
 #include "vncviewer.h"
+#include "../tests/perf/util.h"
 
 #ifdef WIN32
 #include "win32.h"
@@ -79,6 +82,16 @@ CConn::CConn(const char* vncServerName, network::Socket* socket=NULL)
 {
   setShared(::shared);
   sock = socket;
+  benchmark = (benchFile != NULL);
+
+  if (benchmark) {
+    state_ = RFBSTATE_INITIALISATION;
+    reader_ = new CMsgReader(this, benchFile);
+    setStreams(benchFile, NULL);
+    tDecode = tBlit = 0.0;
+    tBlitPixels = tBlitRect = 0;
+    return;
+  }
 
   supportsLocalCursor = true;
   supportsDesktopResize = true;
@@ -335,13 +348,30 @@ void CConn::setName(const char* name)
   desktop->setName(name);
 }
 
+void CConn::startDecodeTimer() {
+  if (benchmark) {
+    tDecodeStart = getTime();
+    tReadOld = benchFile->getReadTime();
+  }
+}
+
+void CConn::stopDecodeTimer() {
+  if (benchmark)
+    tDecode += getTime() - tDecodeStart -
+               (benchFile->getReadTime() - tReadOld);
+}
+
 // framebufferUpdateStart() is called at the beginning of an update.
 // Here we try to send out a new framebuffer update request so that the
 // next update can be sent out in parallel with us decoding the current
 // one.
 void CConn::framebufferUpdateStart()
 {
+  if (benchmark) startDecodeTimer();
+
   CConnection::framebufferUpdateStart();
+
+  if (benchmark) return;
 
   // Update the screen prematurely for very slow updates
   Fl::add_timeout(1.0, handleUpdateTimeout, this);
@@ -355,14 +385,23 @@ void CConn::framebufferUpdateEnd()
 {
   CConnection::framebufferUpdateEnd();
 
+  if (benchmark) stopDecodeTimer();
+
   updateCount++;
 
   Fl::remove_timeout(handleUpdateTimeout, this);
   desktop->updateWindow();
 
   // Compute new settings based on updated bandwidth values
-  if (autoSelect)
+  if (autoSelect && !benchmark)
     autoSelectFormatAndEncoding();
+
+  if (benchmark) {
+    // Make sure that the FLTK handling and the timers gets some CPU time
+    // in case of back to back framebuffer updates.
+    Fl::check();
+    Timer::checkTimeouts();
+  }
 }
 
 // The rest of the callbacks are fairly self-explanatory...
@@ -379,14 +418,16 @@ void CConn::bell()
 
 void CConn::dataRect(const Rect& r, int encoding)
 {
-  sock->inStream().startTiming();
+  if (!benchmark)
+    sock->inStream().startTiming();
 
   if (encoding != encodingCopyRect)
     lastServerEncoding = encoding;
 
   CConnection::dataRect(r, encoding);
 
-  sock->inStream().stopTiming();
+  if (!benchmark)
+    sock->inStream().stopTiming();
 
   pixelCount += r.area();
 }
@@ -530,6 +571,8 @@ void CConn::updatePixelFormat()
   pf.print(str, 256);
   vlog.info(_("Using pixel format %s"),str);
   setPF(pf);
+  if (benchmark)
+    server.setPF(pf);
 }
 
 void CConn::handleOptions(void *data)

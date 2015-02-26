@@ -17,6 +17,7 @@ set(VNCVIEWER_SOURCES
   parameters.cxx
   keysym2ucs.c
   touch.cxx
+  ../tests/perf/util.cxx
   vncviewer.cxx)
 
 if(WIN32)
