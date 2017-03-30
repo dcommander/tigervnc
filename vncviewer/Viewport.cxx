@@ -1,6 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2011-2014 Pierre Ossman for Cendio AB
- * Copyright (C) 2013 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2013, 2017 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -113,6 +113,7 @@ Viewport::Viewport(int w, int h, const rfb::PixelFormat& serverPF, CConn* cc_)
     menuCtrlKey(false), menuAltKey(false), cursor(NULL)
 {
   benchmark = (benchFile != NULL);
+  inUpdateWindow = false;
 
   if (!benchmark)
     Fl::add_clipboard_notify(handleClipboardChange, this);
@@ -183,6 +184,12 @@ const rfb::PixelFormat &Viewport::getPreferredPF()
 void Viewport::updateWindow()
 {
   Rect r;
+  double tBlitStart = 0.0;
+
+  if (benchmark) {
+    inUpdateWindow = true;
+    tBlitStart = getTime();
+  }
 
   r = frameBuffer->getDamage();
   damage(FL_DAMAGE_USER1, r.tl.x + x(), r.tl.y + y(), r.width(), r.height());
@@ -190,6 +197,13 @@ void Viewport::updateWindow()
   if (benchmark) {
     cc->tBlitPixels += r.width() * r.height();
     cc->tBlitRect += 1;
+#if !defined(WIN32) && !defined(__APPLE__)
+    XSync(fl_display, False);
+#else
+    Fl::flush();
+#endif
+    cc->tBlit += getTime() - tBlitStart;
+    inUpdateWindow = false;
   }
 }
 
@@ -283,14 +297,16 @@ void Viewport::draw()
   if ((W == 0) || (H == 0))
     return;
 
-  if (benchmark)
+  if (benchmark && !inUpdateWindow)
     tBlitStart = getTime();
 
   frameBuffer->draw(X - x(), Y - y(), X, Y, W, H);
 
-  if (benchmark) {
+  if (benchmark && !inUpdateWindow) {
 #if !defined(WIN32) && !defined(__APPLE__)
     XSync(fl_display, False);
+#else
+    Fl::flush();
 #endif
     cc->tBlit += getTime() - tBlitStart;
   }

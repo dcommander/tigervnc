@@ -1,5 +1,4 @@
 /* Copyright 2014 Pierre Ossman <ossman@cendio.se> for Cendio AB
- * Copyright (C) 2014 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,8 +22,6 @@
 
 using namespace rfb;
 
-extern double getTime();
-
 CopyRectDecoder::CopyRectDecoder(CConnection* conn) : Decoder(conn)
 {
 }
@@ -37,7 +34,5 @@ void CopyRectDecoder::readRect(const Rect& r, ModifiablePixelBuffer* pb)
 {
   int srcX = conn->getInStream()->readU16();
   int srcY = conn->getInStream()->readU16();
-  double tBlitStart = getTime();
   pb->copyRect(r, Point(r.tl.x-srcX, r.tl.y-srcY));
-  conn->tBlit += getTime() - tBlitStart;
 }

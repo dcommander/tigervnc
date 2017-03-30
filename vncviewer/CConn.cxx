@@ -1,5 +1,5 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright (C) 2011, 2013 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011, 2013, 2017 D. R. Commander.  All Rights Reserved.
  * Copyright 2009-2014 Pierre Ossman for Cendio AB
  * 
  * This is free software; you can redistribute it and/or modify
@@ -372,19 +372,36 @@ void CConn::setName(const char* name)
     desktop->setName(name);
 }
 
+void CConn::startDecodeTimer() {
+  if (benchmark) {
+    tDecodeStart = getTime();
+    tReadOld = benchFile->getReadTime();
+  }
+}
+
+void CConn::stopDecodeTimer() {
+  if (benchmark)
+    tDecode += getTime() - tDecodeStart -
+               (benchFile->getReadTime() - tReadOld);
+}
+
 // framebufferUpdateStart() is called at the beginning of an update.
 // Here we try to send out a new framebuffer update request so that the
 // next update can be sent out in parallel with us decoding the current
 // one.
 void CConn::framebufferUpdateStart()
 {
+  if (benchmark) startDecodeTimer();
+
   // Note: This might not be true if sync fences are supported
   pendingUpdate = false;
 
-  if (!benchmark) requestNewUpdate();
+  if (!benchmark) {
+    requestNewUpdate();
 
-  // Update the screen prematurely for very slow updates
-  Fl::add_timeout(1.0, handleUpdateTimeout, this);
+    // Update the screen prematurely for very slow updates
+    Fl::add_timeout(1.0, handleUpdateTimeout, this);
+  }
 }
 
 // framebufferUpdateEnd() is called at the end of an update.
@@ -393,6 +410,8 @@ void CConn::framebufferUpdateStart()
 // appropriately, and then request another incremental update.
 void CConn::framebufferUpdateEnd()
 {
+  if (benchmark) stopDecodeTimer();
+
   Fl::remove_timeout(handleUpdateTimeout, this);
   desktop->updateWindow();
 
@@ -463,20 +482,6 @@ void CConn::serverCutText(const char* str, rdr::U32 len)
   delete [] buffer;
 }
 
-void CConn::startDecodeTimer() {
-  if (benchmark) {
-    tDecodeStart = getTime();
-    tReadOld = benchFile->getReadTime();
-  }
-}
-
-void CConn::stopDecodeTimer() {
-  if (benchmark)
-    tDecode += getTime() - tDecodeStart -
-               (benchFile->getReadTime() - tReadOld);
-}
-
-
 void CConn::dataRect(const Rect& r, int encoding)
 {
   if (!benchmark)
@@ -498,9 +503,7 @@ void CConn::dataRect(const Rect& r, int encoding)
       throw Exception(_("Unknown encoding"));
     }
   }
-  startDecodeTimer();
   decoders[encoding]->readRect(r, desktop->getFramebuffer());
-  stopDecodeTimer();
 
   if (!benchmark)
     sock->inStream().stopTiming();
