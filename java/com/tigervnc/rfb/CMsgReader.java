@@ -34,7 +34,7 @@ import com.tigervnc.rdr.*;
 
 public class CMsgReader {
 
-  protected CMsgReader(CMsgHandler handler_, InStream is_)
+  public CMsgReader(CMsgHandler handler_, InStream is_)
   {
     imageBufIdealSize = 0;
     handler = handler_;

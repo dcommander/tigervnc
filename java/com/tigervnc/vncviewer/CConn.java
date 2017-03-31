@@ -1,6 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2009-2013 Pierre Ossman <ossman@cendio.se> for Cendio AB
- * Copyright (C) 2011-2013 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011-2013, 2017 D. R. Commander.  All Rights Reserved.
  * Copyright (C) 2011-2015 Brian P. Hinz
  *
  * This is free software; you can redistribute it and/or modify
@@ -81,11 +81,16 @@ public class CConn extends CConnection implements
   static final int KEY_LOC_SHIFT_L = 16;
   static final int SUPER_MASK = 1<<15;
 
+  static final double getTime() {
+    return (double)System.nanoTime() / 1.0e9;
+  }
+
   ////////////////////////////////////////////////////////////////////
   // The following methods are all called from the RFB thread
 
   public CConn(String vncServerName, Socket socket)
   {
+    benchmark = VncViewer.benchFile != null;
     serverHost = null; serverPort = 0; desktop = null;
     pendingPFChange = false;
     currentEncoding = Encodings.encodingTight; lastServerEncoding = -1;
@@ -121,6 +126,13 @@ public class CConn extends CConnection implements
       cp.qualityLevel = qualityLevel.getValue();
     else
       cp.qualityLevel = -1;
+
+    if (benchmark) {
+      setState(RFBSTATE_INITIALISATION);
+      setReader(new CMsgReader(this, VncViewer.benchFile));
+      setStreams(VncViewer.benchFile, null);
+      return;
+    }
 
     if (sock == null) {
       setServerName(Hostname.getHost(vncServerName));
@@ -282,8 +294,23 @@ public class CConn extends CConnection implements
     // Force a switch to the format and encoding we'd like
     formatChange = true; encodingChange = true;
 
-    // And kick off the update cycle
-    requestNewUpdate();
+    if (!benchmark)
+      // And kick off the update cycle
+      requestNewUpdate();
+    else {
+      if (fullColor.getValue()) {
+        pendingPF = fullColorPF;
+      } else {
+        if (lowColorLevel.getValue() == 0) {
+          pendingPF = verylowColorPF;
+        } else if (lowColorLevel.getValue() == 1) {
+          pendingPF = lowColorPF;
+        } else {
+          pendingPF = mediumColorPF;
+        }
+      }
+      pendingPFChange = true;
+    }
 
     // This initial update request is a bit of a corner case, so we need
     // to help out setting the correct format here.
@@ -342,6 +369,17 @@ public class CConn extends CConnection implements
       desktop.setName(name);
   }
 
+  public void startDecodeTimer() {
+    tDecodeStart = getTime();
+    tReadOld = VncViewer.benchFile.getReadTime();
+  }
+
+  public void stopDecodeTimer() {
+    double tRead = tReadOld;
+    tRead = VncViewer.benchFile.getReadTime();
+    tDecode += getTime() - tDecodeStart - (tRead - tReadOld);
+  }
+
   // framebufferUpdateStart() is called at the beginning of an update.
   // Here we try to send out a new framebuffer update request so that the
   // next update can be sent out in parallel with us decoding the current
@@ -351,12 +389,14 @@ public class CConn extends CConnection implements
     ModifiablePixelBuffer pb;
     PlatformPixelBuffer ppb;
 
+    if (benchmark) startDecodeTimer();
+
     super.framebufferUpdateStart();
 
     // Note: This might not be true if sync fences are supported
     pendingUpdate = false;
 
-    requestNewUpdate();
+    if (!benchmark) requestNewUpdate();
 
     // We might still be rendering the previous update
     pb = getFramebuffer();
@@ -374,6 +414,8 @@ public class CConn extends CConnection implements
   public void framebufferUpdateEnd()
   {
     super.framebufferUpdateEnd();
+
+    if (benchmark) stopDecodeTimer();
 
     desktop.updateWindow();
 
@@ -394,7 +436,7 @@ public class CConn extends CConnection implements
     }
 
     // Compute new settings based on updated bandwidth values
-    if (autoSelect.getValue())
+    if (autoSelect.getValue() && !benchmark)
       autoSelectFormatAndEncoding();
   }
 
@@ -423,14 +465,19 @@ public class CConn extends CConnection implements
 
   public void dataRect(Rect r, int encoding)
   {
-    sock.inStream().startTiming();
+    if (!benchmark)
+      sock.inStream().startTiming();
 
     if (encoding != Encodings.encodingCopyRect)
       lastServerEncoding = encoding;
 
     super.dataRect(r, encoding);
 
-    sock.inStream().stopTiming();
+    if (!benchmark)
+      sock.inStream().stopTiming();
+
+    decodePixels += r.width() * r.height();
+    decodeRect++;
   }
 
   public void setCursor(int width, int height, Point hotspot,
@@ -744,19 +791,19 @@ public class CConn extends CConnection implements
 
   // writeClientCutText() is called from the clipboard dialog
   public void writeClientCutText(String str, int len) {
-    if (state() != RFBSTATE_NORMAL || shuttingDown)
+    if (state() != RFBSTATE_NORMAL || shuttingDown || benchmark)
       return;
     writer().writeClientCutText(str, len);
   }
 
   public void writeKeyEvent(int keysym, boolean down) {
-    if (state() != RFBSTATE_NORMAL || shuttingDown)
+    if (state() != RFBSTATE_NORMAL || shuttingDown || benchmark)
       return;
     writer().writeKeyEvent(keysym, down);
   }
 
   public void writeKeyEvent(KeyEvent ev) {
-    if (viewOnly.getValue() || shuttingDown)
+    if (viewOnly.getValue() || shuttingDown || benchmark)
       return;
 
     boolean down = (ev.getID() == KeyEvent.KEY_PRESSED);
@@ -847,7 +894,7 @@ public class CConn extends CConnection implements
   }
 
   public void writePointerEvent(MouseEvent ev) {
-    if (state() != RFBSTATE_NORMAL || shuttingDown)
+    if (state() != RFBSTATE_NORMAL || shuttingDown || benchmark)
       return;
 
     switch (ev.getID()) {
@@ -865,7 +912,7 @@ public class CConn extends CConnection implements
   }
 
   public void writeWheelEvent(MouseWheelEvent ev) {
-    if (state() != RFBSTATE_NORMAL || shuttingDown)
+    if (state() != RFBSTATE_NORMAL || shuttingDown || benchmark)
       return;
     int x, y;
     int clicks = ev.getWheelRotation();
@@ -954,6 +1001,11 @@ public class CConn extends CConnection implements
 
   private HashMap<Integer, Integer> downKeySym;
   public ActionListener closeListener = null;
+
+  public double tDecode, tBlit;
+  public long decodePixels, decodeRect, blitPixels, blits;
+  double tDecodeStart, tReadOld;
+  boolean benchmark;
 
   static LogWriter vlog = new LogWriter("CConn");
 }

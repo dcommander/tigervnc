@@ -1,6 +1,6 @@
 /* Copyright (C) 2000-2003 Constantin Kaplinsky.  All Rights Reserved.
  * Copyright 2004-2005 Cendio AB.
- * Copyright (C) 2011 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011-2012, 2017 D. R. Commander.  All Rights Reserved.
  * Copyright (C) 2011-2012 Brian P. Hinz
  *
  * This is free software; you can redistribute it and/or modify
@@ -56,6 +56,15 @@ public class TightDecoder extends Decoder {
     zis = new ZlibInStream[4];
     for (int i = 0; i < 4; i++)
       zis[i] = new ZlibInStream();
+  }
+
+  public void reset() {
+    for (int i = 0; i < 4; i++) {
+      if (zis[i] != null) {
+        zis[i] = new ZlibInStream();
+        System.gc();
+      }
+    }
   }
 
   public void readRect(Rect r, InStream is,

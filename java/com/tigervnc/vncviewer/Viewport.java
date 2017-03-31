@@ -1,7 +1,7 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright (C) 2006 Constantin Kaplinsky.  All Rights Reserved.
  * Copyright (C) 2009 Paul Donohue.  All Rights Reserved.
- * Copyright (C) 2010, 2012-2013 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2010, 2012-2013, 2017 D. R. Commander.  All Rights Reserved.
  * Copyright (C) 2011-2017 Brian P. Hinz
  *
  * This is free software; you can redistribute it and/or modify
@@ -57,6 +57,10 @@ class Viewport extends JPanel implements MouseListener,
 
   static LogWriter vlog = new LogWriter("Viewport");
 
+  static final double getTime() {
+    return (double)System.nanoTime() / 1.0e9;
+  }
+
   public Viewport(int w, int h, PixelFormat serverPF, CConn cc_)
   {
     cc = cc_;
@@ -74,7 +78,7 @@ class Viewport extends JPanel implements MouseListener,
     addKeyListener(this);
     addFocusListener(new FocusAdapter() {
       public void focusGained(FocusEvent e) {
-        ClipboardDialog.clientCutText();
+        if (VncViewer.benchFile == null) ClipboardDialog.clientCutText();
       }
       public void focusLost(FocusEvent e) {
         cc.releaseDownKeys();
@@ -87,7 +91,8 @@ class Viewport extends JPanel implements MouseListener,
     // a server-side cursor. Ideally we'd like to send the actual pointer
     // position, but we can't really tell when the window manager is done
     // placing us so we don't have a good time for that.
-    cc.writer().writePointerEvent(new Point(w/2, h/2), 0);
+    if (VncViewer.benchFile == null)
+      cc.writer().writePointerEvent(new Point(w/2, h/2), 0);
   }
 
   // Most efficient format (from Viewport's point of view)
@@ -99,7 +104,9 @@ class Viewport extends JPanel implements MouseListener,
   // Copy the areas of the framebuffer that have been changed (damaged)
   // to the displayed window.
   public void updateWindow() {
+    double tBlitStart = getTime();
     Rect r = frameBuffer.getDamage();
+    cc.blitPixels += r.width() * r.height();
     if (!r.is_empty()) {
       if (cc.cp.width != scaledWidth ||
           cc.cp.height != scaledHeight) {
@@ -112,6 +119,8 @@ class Viewport extends JPanel implements MouseListener,
         paintImmediately(r.tl.x, r.tl.y, r.width(), r.height());
       }
     }
+    cc.tBlit += getTime() - tBlitStart;
+    cc.blits += 1;
   }
 
   static final int[] dotcursor_xpm = {
