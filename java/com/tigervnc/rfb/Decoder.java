@@ -1,5 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright (C) 2019 Brian P. Hinz
+ * Copyright (C) 2012 D. R. Commander.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -44,6 +45,8 @@ abstract public class Decoder {
   abstract public void decodeRect(Rect r, Object buffer,
                                   int buflen, ServerParams server,
                                   ModifiablePixelBuffer pb);
+
+  public void reset() {}
 
   public void getAffectedRegion(Rect rect, Object buffer,
                                 int buflen, ServerParams server,

@@ -1,5 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright (C) 2011-2019 Brian P. Hinz
+ * Copyright (C) 2012, 2017, 2021 D. R. Commander.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -614,6 +615,8 @@ abstract public class CConnection extends CMsgHandler {
   // format and encoding appropriately.
   private void requestNewUpdate()
   {
+    if (com.tigervnc.vncviewer.VncViewer.benchFile != null) return;
+
     if (formatChange && !pendingPFChange) {
       /* Catch incorrect requestNewUpdate calls */
       assert(!pendingUpdate || continuousUpdates);
@@ -720,6 +723,11 @@ abstract public class CConnection extends CMsgHandler {
 
   protected boolean supportsLocalCursor;
   protected boolean supportsDesktopResize;
+
+  public void reset() {
+    decoder.reset();
+    state_ = stateEnum.RFBSTATE_INITIALISATION;
+  }
 
   private InStream is;
   private OutStream os;

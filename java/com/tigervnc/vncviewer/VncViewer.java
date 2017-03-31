@@ -1,6 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2011 Pierre Ossman <ossman@cendio.se> for Cendio AB
- * Copyright (C) 2011-2013 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011-2013, 2017, 2021 D. R. Commander.  All Rights Reserved.
  * Copyright (C) 2011-2019 Brian P. Hinz
  *
  * This is free software; you can redistribute it and/or modify
@@ -84,6 +84,10 @@ public class VncViewer implements Runnable {
   private String defaultServerName;
   int VNCSERVERNAMELEN = 256;
   CharBuffer vncServerName = CharBuffer.allocate(VNCSERVERNAMELEN);
+
+  static final double getTime() {
+    return (double)System.nanoTime() / 1.0e9;
+  }
 
   public static void setLookAndFeel() {
     try {
@@ -181,6 +185,35 @@ public class VncViewer implements Runnable {
         if (++i >= argv.length) usage();
         System.err.println("Log setting: "+argv[i]);
         LogWriter.setLogParams(argv[i]);
+        continue;
+      }
+
+      if (argv[i].equalsIgnoreCase("-bench")) {
+        if (i < argv.length - 1) {
+          try {
+            benchFile = new FileInStream(argv[++i]);
+          } catch (java.lang.Exception e) {
+            reportException(new WarningException("Could not open session capture:\n" +
+                                                 e.getMessage()));
+            exit(1);
+          }
+        }
+        continue;
+      }
+
+      if (argv[i].equalsIgnoreCase("-benchiter")) {
+        if (i < argv.length - 1) {
+          int iter = Integer.parseInt(argv[++i]);
+          if (iter > 0) benchIter = iter;
+        }
+        continue;
+      }
+
+      if (argv[i].equalsIgnoreCase("-benchwarmup")) {
+        if (i < argv.length - 1) {
+          int warmup = Integer.parseInt(argv[++i]);
+          if (warmup > 0) benchWarmup = warmup;
+        }
         continue;
       }
 
@@ -379,6 +412,7 @@ public class VncViewer implements Runnable {
     CSecurity.upg = dlg;
     CSecurityTLS.msg = dlg;
     Socket sock = null;
+    int exitStatus = 0;
 
     /* Specifying -via and -listen together is nonsense */
     if (listenMode.getValue() && !via.getValueStr().isEmpty()) {
@@ -390,59 +424,122 @@ public class VncViewer implements Runnable {
       exit(1);
     }
 
-    if (listenMode.getValue()) {
-      int port = 5500;
+    if (benchFile == null) {
+      if (listenMode.getValue()) {
+        int port = 5500;
 
-      if (vncServerName.charAt(0) != 0 &&
-          Character.isDigit(vncServerName.charAt(0)))
-        port = Integer.parseInt(vncServerName.toString());
+        if (vncServerName.charAt(0) != 0 &&
+            Character.isDigit(vncServerName.charAt(0)))
+          port = Integer.parseInt(vncServerName.toString());
 
-      TcpListener listener = null;
-      try {
-        listener = new TcpListener(null, port);
-      } catch (java.lang.Exception e) {
-        reportException(e);
-        exit(1);
-      }
-
-      vlog.info("Listening on port "+port);
-
-      while (sock == null)
-        sock = listener.accept();
-    } else {
-      if (vncServerName.charAt(0) == 0) {
+        TcpListener listener = null;
         try {
-          SwingUtilities.invokeAndWait(
-            new ServerDialog(defaultServerName, vncServerName));
-        } catch (InvocationTargetException e) {
+          listener = new TcpListener(null, port);
+        } catch (java.lang.Exception e) {
           reportException(e);
-        } catch (InterruptedException e) {
-          reportException(e);
+          exit(1);
         }
-        if (vncServerName.charAt(0) == 0)
-          exit(0);
+
+        vlog.info("Listening on port "+port);
+
+        while (sock == null)
+          sock = listener.accept();
+      } else {
+        if (vncServerName.charAt(0) == 0) {
+          try {
+            SwingUtilities.invokeAndWait(
+              new ServerDialog(defaultServerName, vncServerName));
+          } catch (InvocationTargetException e) {
+            reportException(e);
+          } catch (InterruptedException e) {
+            reportException(e);
+          }
+          if (vncServerName.charAt(0) == 0)
+            exit(0);
+        }
       }
     }
 
-    try {
-      cc = new CConn(vncServerName.toString(), sock);
-      while (!cc.shuttingDown)
-        cc.processMsg();
-      exit(0);
-    } catch (java.lang.Exception e) {
-      if (cc == null || !cc.shuttingDown) {
-        reportException(e);
-        if (cc != null)
-          cc.close();
+    double tAvg = 0.0, tAvgDecode = 0.0, tAvgBlit = 0.0;
+    if (benchFile == null) { benchIter = 1;  benchWarmup = 0; }
+
+    for (int i = 0; i < benchIter + benchWarmup; i++) {
+      double tStart = 0.0, tTotal;
+
+      try {
+        if (cc == null)
+          cc = new CConn(vncServerName.toString(), sock);
+        if (benchFile != null) {
+          if (i < benchWarmup)
+            System.out.format("Benchmark warmup run %d\n", i + 1);
+          else
+            System.out.format("Benchmark run %d:\n", i + 1 - benchWarmup);
+          tStart = getTime();
+          try {
+            while (!cc.shuttingDown)
+              cc.processMsg();
+          } catch (EndOfStream e) {}
+          tTotal = getTime() - tStart - benchFile.getReadTime();
+          if (i >= benchWarmup) {
+            System.out.format("%f s (Decode = %f, Blit = %f)\n", tTotal,
+                              cc.tDecode, cc.tBlit);
+            System.out.println("     Decode statistics:");
+            System.out.format("     %.3f Mpixels, %.3f Mpixels/sec, %d rect, %.0f pixels/rect,\n",
+                              (double)cc.decodePixels / 1000000.,
+                              (double)cc.decodePixels / 1000000. / cc.tDecode,
+                              cc.decodeRect,
+                              (double)cc.decodePixels / (double)cc.decodeRect);
+            System.out.format("       %.0f rects/update\n",
+                              (double)cc.decodeRect / (double)cc.blits);
+            System.out.println("     Blit statistics:");
+            System.out.format("     %.3f Mpixels, %.3f Mpixels/sec, %d updates, %.0f pixels/update\n",
+                              (double)cc.blitPixels / 1000000.,
+                              (double)cc.blitPixels / 1000000. / cc.tBlit,
+                              cc.blits,
+                              (double)cc.blitPixels / (double)cc.blits);
+            tAvg += tTotal;
+            tAvgDecode += cc.tDecode;
+            tAvgBlit += cc.tBlit;
+          }
+          System.out.print("\n");
+          cc.tDecode = cc.tBlit = 0.0;
+          cc.decodePixels = cc.decodeRect = cc.blitPixels = cc.blits = 0;
+          benchFile.reset();
+          benchFile.resetReadTime();
+          cc.reset();
+          System.gc();
+        } else {
+          while (!cc.shuttingDown)
+            cc.processMsg();
+        }
+      } catch (java.lang.Exception e) {
+        if (cc == null || !cc.shuttingDown) {
+          reportException(e);
+          exitStatus = 1;
+          if (cc != null) cc.close();
+        } else {
+          cc = null;
+        }
       }
-      exit(1);
     }
+
+    if (benchFile != null && benchIter > 1)
+      System.out.format("Average          :  %f s (Decode = %f, Blit = %f)\n",
+                        tAvg / (double)benchIter,
+                        tAvgDecode / (double)benchIter,
+                        tAvgBlit / (double)benchIter);
+
+    exit(exitStatus);
   }
 
   public static CConn cc;
   public static StringParameter config
   = new StringParameter("Config",
   "Specifies a configuration file to load.", null);
+
+  public static FileInStream benchFile;
+  static int benchIter = 1;
+  static int benchWarmup = 0;
 
   static LogWriter vlog = new LogWriter("VncViewer");
 }

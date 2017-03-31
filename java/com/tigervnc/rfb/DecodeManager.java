@@ -1,5 +1,6 @@
 /* Copyright 2015 Pierre Ossman for Cendio AB
  * Copyright 2016-2019 Brian P. Hinz
+ * Copyright (C) 2012, 2017 D. R. Commander.  All Rights Reserved.
  * 
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -44,6 +45,15 @@ public class DecodeManager {
     consumerCond = queueMutex.newCondition();
 
     cpuCount = Runtime.getRuntime().availableProcessors();
+    String env = System.getenv("TIGERVNC_NTHREADS");
+    if (env != null && env.length() > 0) {
+      int temp = -1;
+      try {
+        temp = Integer.parseInt(env);
+      } catch (NumberFormatException e) {};
+      if (temp >= 1)
+        cpuCount = temp;
+    }
     if (cpuCount == 0) {
       vlog.error("Unable to determine the number of CPU cores on this system");
       cpuCount = 1;
@@ -75,6 +85,13 @@ public class DecodeManager {
       } catch (IllegalStateException e) { }
     }
 
+  }
+
+  public final void reset() {
+    for (int i = 0; i < Encodings.encodingMax; i++) {
+      if (decoders[i] != null)
+        decoders[i].reset();
+    }
   }
 
   public void decodeRect(Rect r, int encoding,

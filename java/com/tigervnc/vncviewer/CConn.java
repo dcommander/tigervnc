@@ -1,6 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2009-2013 Pierre Ossman <ossman@cendio.se> for Cendio AB
- * Copyright (C) 2011-2013 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011-2013, 2017, 2021 D. R. Commander.  All Rights Reserved.
  * Copyright (C) 2011-2019 Brian P. Hinz
  *
  * This is free software; you can redistribute it and/or modify
@@ -77,11 +77,16 @@ public class CConn extends CConnection implements
   static final PixelFormat mediumColorPF =
     new PixelFormat(8, 8, false, true, 7, 7, 3, 5, 2, 0);
 
+  static final double getTime() {
+    return (double)System.nanoTime() / 1.0e9;
+  }
+
   ////////////////////////////////////////////////////////////////////
   // The following methods are all called from the RFB thread
 
   public CConn(String vncServerName, Socket socket)
   {
+    benchmark = VncViewer.benchFile != null;
     serverHost = null; serverPort = 0; desktop = null;
     updateCount = 0; pixelCount = 0;
     lastServerEncoding = -1;
@@ -98,6 +103,13 @@ public class CConn extends CConnection implements
 
     if (!noJpeg.getValue())
       setQualityLevel(qualityLevel.getValue());
+
+    if (benchmark) {
+      setState(stateEnum.RFBSTATE_INITIALISATION);
+      setReader(new CMsgReader(this, VncViewer.benchFile));
+      setStreams(VncViewer.benchFile, null);
+      return;
+    }
 
     if (sock == null) {
       setServerName(Hostname.getHost(vncServerName));
@@ -265,12 +277,25 @@ public class CConn extends CConnection implements
       desktop.setName(name);
   }
 
+  public void startDecodeTimer() {
+    tDecodeStart = getTime();
+    tReadOld = VncViewer.benchFile.getReadTime();
+  }
+
+  public void stopDecodeTimer() {
+    double tRead = tReadOld;
+    tRead = VncViewer.benchFile.getReadTime();
+    tDecode += getTime() - tDecodeStart - (tRead - tReadOld);
+  }
+
   // framebufferUpdateStart() is called at the beginning of an update.
   // Here we try to send out a new framebuffer update request so that the
   // next update can be sent out in parallel with us decoding the current
   // one.
   public void framebufferUpdateStart()
   {
+
+    if (benchmark) startDecodeTimer();
 
     super.framebufferUpdateStart();
 
@@ -284,12 +309,14 @@ public class CConn extends CConnection implements
   {
     super.framebufferUpdateEnd();
 
+    if (benchmark) stopDecodeTimer();
+
     updateCount++;
 
     desktop.updateWindow();
 
     // Compute new settings based on updated bandwidth values
-    if (autoSelect.getValue())
+    if (autoSelect.getValue() && !benchmark)
       autoSelectFormatAndEncoding();
   }
 
@@ -318,14 +345,16 @@ public class CConn extends CConnection implements
 
   public void dataRect(Rect r, int encoding)
   {
-    sock.inStream().startTiming();
+    if (!benchmark)
+      sock.inStream().startTiming();
 
     if (encoding != Encodings.encodingCopyRect)
       lastServerEncoding = encoding;
 
     super.dataRect(r, encoding);
 
-    sock.inStream().stopTiming();
+    if (!benchmark)
+      sock.inStream().stopTiming();
 
     pixelCount += r.area();
   }
@@ -447,6 +476,8 @@ public class CConn extends CConnection implements
     String str = pf.print();
     vlog.info("Using pixel format " + str);
     setPF(pf);
+    if (benchmark)
+      server.setPF(pf);
   }
 
   public void handleOptions()
@@ -498,7 +529,7 @@ public class CConn extends CConnection implements
 
   // writeClientCutText() is called from the clipboard dialog
   public void writeClientCutText(String str, int len) {
-    if ((state() != stateEnum.RFBSTATE_NORMAL) || shuttingDown)
+    if ((state() != stateEnum.RFBSTATE_NORMAL) || shuttingDown || benchmark)
       return;
     writer().writeClientCutText(str, len);
   }
@@ -545,6 +576,11 @@ public class CConn extends CConnection implements
   private int lastServerEncoding;
 
   public ActionListener closeListener = null;
+
+  public double tDecode, tBlit;
+  public long decodePixels, decodeRect, blitPixels, blits;
+  double tDecodeStart, tReadOld;
+  boolean benchmark;
 
   static LogWriter vlog = new LogWriter("CConn");
 }
