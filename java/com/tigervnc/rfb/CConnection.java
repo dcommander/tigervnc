@@ -1,5 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright (C) 2011-2012 Brian P. Hinz
+ * Copyright (C) 2012, 2017 D. R. Commander.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -375,7 +376,7 @@ abstract public class CConnection extends CMsgHandler {
 
   InStream is;
   OutStream os;
-  CMsgReaderV3 reader_;
+  protected CMsgReaderV3 reader_;
   CMsgWriterV3 writer_;
   boolean shared;
   public CSecurity csecurity;
@@ -383,7 +384,7 @@ abstract public class CConnection extends CMsgHandler {
   public static final int maxSecTypes = 8;
   int nSecTypes;
   int[] secTypes;
-  int state_ = RFBSTATE_UNINITIALISED;
+  protected int state_ = RFBSTATE_UNINITIALISED;
   String serverName;
   int serverPort;
   boolean useProtocol3_3;

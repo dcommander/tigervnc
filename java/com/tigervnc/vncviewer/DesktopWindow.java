@@ -1,7 +1,7 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright (C) 2006 Constantin Kaplinsky.  All Rights Reserved.
  * Copyright (C) 2009 Paul Donohue.  All Rights Reserved.
- * Copyright (C) 2010, 2012-2013 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2010, 2012-2013, 2017 D. R. Commander.  All Rights Reserved.
  * Copyright (C) 2011-2014 Brian P. Hinz
  *
  * This is free software; you can redistribute it and/or modify
@@ -46,6 +46,10 @@ import com.tigervnc.rfb.Point;
 class DesktopWindow extends JPanel implements Runnable, MouseListener,
   MouseMotionListener, MouseWheelListener, KeyListener {
 
+  static final double getTime() {
+    return (double)System.nanoTime() / 1.0e9;
+  }
+
   ////////////////////////////////////////////////////////////////////
   // The following methods are all called from the RFB thread
 
@@ -85,7 +89,7 @@ class DesktopWindow extends JPanel implements Runnable, MouseListener,
     addKeyListener(this);
     addFocusListener(new FocusAdapter() {
       public void focusGained(FocusEvent e) {
-        cc.clipboardDialog.clientCutText();
+        if (cc.viewer.benchFile == null) cc.clipboardDialog.clientCutText();
       }
       public void focusLost(FocusEvent e) {
         cc.releaseDownKeys();
@@ -222,7 +226,9 @@ class DesktopWindow extends JPanel implements Runnable, MouseListener,
 
   // Update the actual window with the changed parts of the framebuffer.
   public void updateWindow() {
+    double tBlitStart = getTime();
     Rect r = damage;
+    cc.blitPixels += r.width() * r.height();
     if (!r.is_empty()) {
       if (cc.cp.width != scaledWidth || cc.cp.height != scaledHeight) {
         int x = (int)Math.floor(r.tl.x * scaleWidthRatio);
@@ -236,6 +242,8 @@ class DesktopWindow extends JPanel implements Runnable, MouseListener,
       }
       damage.clear();
     }
+    cc.tBlit += getTime() - tBlitStart;
+    cc.blits += 1;
   }
 
   // resize() is called when the desktop has changed size

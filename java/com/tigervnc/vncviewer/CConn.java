@@ -1,6 +1,6 @@
 /* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  * Copyright 2009-2013 Pierre Ossman <ossman@cendio.se> for Cendio AB
- * Copyright (C) 2011-2013 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011-2013, 2017 D. R. Commander.  All Rights Reserved.
  * Copyright (C) 2011-2015 Brian P. Hinz
  *
  * This is free software; you can redistribute it and/or modify
@@ -71,6 +71,10 @@ public class CConn extends CConnection implements
   static final int KEY_LOC_SHIFT_L = 16;
   static final int SUPER_MASK = 1<<15;
 
+  static final double getTime() {
+    return (double)System.nanoTime() / 1.0e9;
+  }
+
   ////////////////////////////////////////////////////////////////////
   // The following methods are all called from the RFB thread
 
@@ -78,6 +82,7 @@ public class CConn extends CConnection implements
                String vncServerName)
   {
     serverHost = null; serverPort = 0; sock = sock_; viewer = viewer_;
+    benchmark = viewer.benchFile != null;
     pendingPFChange = false;
     currentEncoding = Encodings.encodingTight; lastServerEncoding = -1;
     fullColour = viewer.fullColour.getValue();
@@ -113,6 +118,12 @@ public class CConn extends CConnection implements
     cp.noJpeg = viewer.noJpeg.getValue();
     cp.qualityLevel = viewer.qualityLevel.getValue();
     initMenu();
+
+    if (benchmark) {
+      state_=RFBSTATE_INITIALISATION;
+      reader_=new CMsgReaderV3(this, viewer.benchFile);
+      return;
+    }
 
     if (sock != null) {
       String name = sock.getPeerEndpoint();
@@ -161,6 +172,13 @@ public class CConn extends CConnection implements
   {
     //StringBuffer titleText = new StringBuffer("VNC Viewer: "+title);
     return true;
+  }
+
+  // RFB thread
+  public void reset() {
+    if (reader_ != null)
+      reader_.reset();
+    state_ = RFBSTATE_INITIALISATION;
   }
 
   // deleteWindow() is called when the user closes the desktop or menu windows.
@@ -255,8 +273,23 @@ public class CConn extends CConnection implements
     // Force a switch to the format and encoding we'd like
     formatChange = true; encodingChange = true;
 
-    // And kick off the update cycle
-    requestNewUpdate();
+    if (!benchmark)
+      // And kick off the update cycle
+      requestNewUpdate();
+    else {
+      if (fullColour) {
+        pendingPF = fullColourPF;
+      } else {
+        if (lowColourLevel == 0) {
+          pendingPF = verylowColourPF;
+        } else if (lowColourLevel == 1) {
+          pendingPF = lowColourPF;
+        } else {
+          pendingPF = mediumColourPF;
+        }
+      }
+      pendingPFChange = true;
+    }
 
     // This initial update request is a bit of a corner case, so we need
     // to help out setting the correct format here.
@@ -361,16 +394,30 @@ public class CConn extends CConnection implements
     }
   }
 
+  public void startDecodeTimer() {
+    tDecodeStart = getTime();
+    tReadOld = viewer.benchFile.getReadTime();
+  }
+
+  public void stopDecodeTimer() {
+    double tRead = tReadOld;
+    tRead = viewer.benchFile.getReadTime();
+    tDecode += getTime() - tDecodeStart - (tRead - tReadOld);
+  }
+
+
   // framebufferUpdateStart() is called at the beginning of an update.
   // Here we try to send out a new framebuffer update request so that the
   // next update can be sent out in parallel with us decoding the current
   // one.
   public void framebufferUpdateStart()
   {
+    if (benchmark) startDecodeTimer();
+
     // Note: This might not be true if sync fences are supported
     pendingUpdate = false;
 
-    requestNewUpdate();
+    if (!benchmark) requestNewUpdate();
   }
 
   // framebufferUpdateEnd() is called at the end of an update.
@@ -379,6 +426,7 @@ public class CConn extends CConnection implements
   // appropriately, and then request another incremental update.
   public void framebufferUpdateEnd()
   {
+    if (benchmark) stopDecodeTimer();
 
     desktop.updateWindow();
 
@@ -435,7 +483,7 @@ public class CConn extends CConnection implements
     }
 
     // Compute new settings based on updated bandwidth values
-    if (autoSelect)
+    if (autoSelect && !benchmark)
       autoSelectFormatAndEncoding();
   }
 
@@ -459,14 +507,18 @@ public class CConn extends CConnection implements
   // avoid skewing the bandwidth estimation as a result of the server
   // being slow or the network having high latency
   public void beginRect(Rect r, int encoding) {
-    sock.inStream().startTiming();
+    if (!benchmark)
+      sock.inStream().startTiming();
     if (encoding != Encodings.encodingCopyRect) {
       lastServerEncoding = encoding;
     }
   }
 
   public void endRect(Rect r, int encoding) {
-    sock.inStream().stopTiming();
+    if (!benchmark)
+      sock.inStream().stopTiming();
+    decodePixels += r.width() * r.height();
+    decodeRect++;
   }
 
   public void fillRect(Rect r, int p) {
@@ -1248,19 +1300,19 @@ public class CConn extends CConnection implements
 
   // writeClientCutText() is called from the clipboard dialog
   public void writeClientCutText(String str, int len) {
-    if (state() != RFBSTATE_NORMAL || shuttingDown)
+    if (state() != RFBSTATE_NORMAL || shuttingDown || benchmark)
       return;
     writer().writeClientCutText(str, len);
   }
 
   public void writeKeyEvent(int keysym, boolean down) {
-    if (state() != RFBSTATE_NORMAL || shuttingDown)
+    if (state() != RFBSTATE_NORMAL || shuttingDown || benchmark)
       return;
     writer().writeKeyEvent(keysym, down);
   }
 
   public void writeKeyEvent(KeyEvent ev) {
-    if (viewer.viewOnly.getValue() || shuttingDown)
+    if (viewer.viewOnly.getValue() || shuttingDown || benchmark)
       return;
 
     boolean down = (ev.getID() == KeyEvent.KEY_PRESSED);
@@ -1351,7 +1403,7 @@ public class CConn extends CConnection implements
   }
 
   public void writePointerEvent(MouseEvent ev) {
-    if (state() != RFBSTATE_NORMAL || shuttingDown)
+    if (state() != RFBSTATE_NORMAL || shuttingDown || benchmark)
       return;
 
     switch (ev.getID()) {
@@ -1378,7 +1430,7 @@ public class CConn extends CConnection implements
   }
 
   public void writeWheelEvent(MouseWheelEvent ev) {
-    if (state() != RFBSTATE_NORMAL || shuttingDown)
+    if (state() != RFBSTATE_NORMAL || shuttingDown || benchmark)
       return;
     int x, y;
     int clicks = ev.getWheelRotation();
@@ -1497,6 +1549,11 @@ public class CConn extends CConnection implements
   boolean fullScreen;
   private HashMap<Integer, Integer> downKeySym;
   public ActionListener closeListener = null;
+
+  public double tDecode, tBlit;
+  public long decodePixels, decodeRect, blitPixels, blits;
+  double tDecodeStart, tReadOld;
+  boolean benchmark;
 
   static LogWriter vlog = new LogWriter("CConn");
 }
