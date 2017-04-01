@@ -41,7 +41,11 @@ else()
   set(VNCVIEWER_SOURCES ${VNCVIEWER_SOURCES} X11PixelBuffer.cxx)
 endif()
 
-if(WIN32 AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+if(WIN32)
+  option(BUILD_CONSOLE "Build console version of the TigerVNC Viewer" OFF)
+endif()
+
+if(WIN32 AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT BUILD_CONSOLE)
   add_executable(vncviewer WIN32 ${VNCVIEWER_SOURCES})
 else()
   add_executable(vncviewer ${VNCVIEWER_SOURCES})
