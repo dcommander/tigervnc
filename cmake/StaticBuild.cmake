@@ -139,6 +139,7 @@ if(BUILD_STATIC_GCC)
     # mingw has some fun circular dependencies that requires us to link
     # these things again
     set(STATIC_BASE_LIBRARIES "${STATIC_BASE_LIBRARIES} -lmingw32 -lgcc_eh -lgcc -lmoldname -lmingwex -lmsvcrt")
+    set(STATIC_BASE_LIBRARIES "${STATIC_BASE_LIBRARIES} -lpthread")
   else()
     set(STATIC_BASE_LIBRARIES "${STATIC_BASE_LIBRARIES} -lm -lgcc -lgcc_eh -lc")
   endif()
